@@ -1,0 +1,439 @@
+---
+title: "Built-in Parsers"
+description: "Ready-to-use parsers for common data types"
+---
+
+Built-in parsers cover the most common URL query string types. Each parser is a `SingleParserBuilder<T>` — it implements `.withDefault()`, `.withOptions()`, and `.parseServerSide()` out of the box.
+
+Import any parser directly from the package:
+
+```typescript
+import {
+  parseAsString,
+  parseAsInteger,
+  parseAsBoolean,
+  parseAsArrayOf,
+  // ...
+} from "./nuqs";
+```
+
+---
+
+## Parser builder methods
+
+Every built-in parser exposes these chainable methods:
+
+<ParamField path="withDefault" type="(value: NonNullable<T>) => ParserBuilder<T>">
+  Sets a default value. Changes the return type from `T | null` to `T`. When the current value equals the default, the key is removed from the URL (`clearOnDefault` behavior).
+
+  ```typescript
+  const parser = parseAsInteger.withDefault(0);
+  // return type is now `number`, not `number | null`
+  ```
+</ParamField>
+
+<ParamField path="withOptions" type="(options: Options) => ParserBuilder<T>">
+  Merges `Options` into the parser. Useful for setting `history`, `scroll`, `throttleMs`, and other options on a per-parser basis.
+
+  ```typescript
+  const parser = parseAsString.withOptions({ history: "push" });
+  ```
+</ParamField>
+
+<ParamField path="parseServerSide" type="(value: string | string[] | undefined) => T | null">
+  Parses a value outside of a component — for example, in a server function or loader. Accepts the raw value from `URLSearchParams.get()` or `URLSearchParams.getAll()`. Returns `null` when the value is absent or invalid.
+
+  ```typescript
+  const page = parseAsInteger.parseServerSide(
+    url.searchParams.get("page") ?? undefined
+  );
+  ```
+</ParamField>
+
+---
+
+## Primitives
+
+### `parseAsString`
+
+Parses any string value. The identity parser — `parse` returns the value as-is, `serialize` calls `String`.
+
+| URL param | JS value |
+|-----------|----------|
+| `?name=Alice` | `"Alice"` |
+| `?name=` | `""` |
+| _(absent)_ | `null` |
+
+```typescript
+import { createQueryState, parseAsString } from "./nuqs";
+
+const [name, setName] = createQueryState("name", parseAsString);
+// name() is string | null
+
+const [name, setName] = createQueryState(
+  "name",
+  parseAsString.withDefault("anonymous")
+);
+// name() is always string
+```
+
+---
+
+### `parseAsInteger`
+
+Parses an integer value using `parseInt`. Returns `null` when the value is not a valid integer (NaN check). Serializes with `Math.round(v).toString()`.
+
+| URL param | JS value |
+|-----------|----------|
+| `?count=42` | `42` |
+| `?count=3.9` | `3` (truncated) |
+| `?count=abc` | `null` |
+| _(absent)_ | `null` |
+
+```typescript
+const [count, setCount] = createQueryState(
+  "count",
+  parseAsInteger.withDefault(0)
+);
+// count() is number (never null)
+
+setCount((c) => c + 1);
+```
+
+---
+
+### `parseAsIndex`
+
+Same as `parseAsInteger`, but applies a ±1 offset so that 1-indexed URL values map to 0-indexed JS values. Use this for pagination links where page `1` in the URL corresponds to index `0` internally.
+
+| URL param | JS value (0-indexed) |
+|-----------|----------------------|
+| `?page=1` | `0` |
+| `?page=2` | `1` |
+| `?page=abc` | `null` |
+
+```typescript
+const [pageIndex, setPageIndex] = createQueryState(
+  "page",
+  parseAsIndex.withDefault(0)
+);
+// URL shows ?page=1 when pageIndex() === 0
+```
+
+<Note>
+  `parseAsIndex` adds 1 on serialize and subtracts 1 on parse. The URL always shows the human-readable 1-based number; your component always sees the 0-based index.
+</Note>
+
+---
+
+### `parseAsFloat`
+
+Parses a floating-point number using `parseFloat`. Returns `null` for NaN. Serializes with `String`.
+
+| URL param | JS value |
+|-----------|----------|
+| `?ratio=0.75` | `0.75` |
+| `?ratio=1` | `1` |
+| `?ratio=abc` | `null` |
+
+```typescript
+const [ratio, setRatio] = createQueryState(
+  "ratio",
+  parseAsFloat.withDefault(1.0)
+);
+```
+
+---
+
+### `parseAsHex`
+
+Parses a hexadecimal string using `parseInt(v, 16)`. Returns `null` for NaN. Serializes back to a lowercase hex string, zero-padded to even length.
+
+| URL param | JS value |
+|-----------|----------|
+| `?color=ff0080` | `16711808` |
+| `?color=0` | `0` |
+| `?color=xyz` | `null` |
+
+```typescript
+const [color, setColor] = createQueryState(
+  "color",
+  parseAsHex.withDefault(0x000000)
+);
+
+// Convert back: color().toString(16) => "ff0080"
+```
+
+<Tip>
+  When serializing, the value is rounded with `Math.round` and the resulting hex string is zero-padded if its length is odd, e.g. `f` becomes `0f`.
+</Tip>
+
+---
+
+### `parseAsBoolean`
+
+Parses `"true"` (case-insensitive) as `true`; any other non-null string is `false`. Serializes with `String`.
+
+| URL param | JS value |
+|-----------|----------|
+| `?active=true` | `true` |
+| `?active=false` | `false` |
+| `?active=1` | `false` |
+| _(absent)_ | `null` |
+
+```typescript
+const [isActive, setIsActive] = createQueryState(
+  "active",
+  parseAsBoolean.withDefault(false)
+);
+```
+
+<Note>
+  Only the exact string `"true"` (compared via `.toLowerCase() === "true"`) returns `true`. Everything else (including `"1"`, `"yes"`, `"on"`) returns `false`.
+</Note>
+
+---
+
+## Dates
+
+All date parsers share a custom `eq` function that compares by `Date.valueOf()` rather than reference equality, so `clearOnDefault` works correctly for date values.
+
+### `parseAsTimestamp`
+
+Parses milliseconds since the Unix epoch. Serializes with `Date.valueOf().toString()`.
+
+| URL param | JS value |
+|-----------|----------|
+| `?t=1234567890000` | `new Date(1234567890000)` |
+| `?t=abc` | `null` |
+
+```typescript
+const [timestamp, setTimestamp] = createQueryState(
+  "t",
+  parseAsTimestamp.withDefault(new Date(0))
+);
+```
+
+---
+
+### `parseAsIsoDateTime`
+
+Parses an ISO 8601 datetime string using `new Date(v)`. Serializes with `Date.toISOString()`.
+
+| URL param | JS value |
+|-----------|----------|
+| `?dt=2024-01-15T12:00:00.000Z` | `Date` (UTC noon Jan 15 2024) |
+| `?dt=not-a-date` | `null` |
+
+```typescript
+const [selectedAt, setSelectedAt] = createQueryState(
+  "dt",
+  parseAsIsoDateTime
+);
+// selectedAt() is Date | null
+```
+
+---
+
+### `parseAsIsoDate`
+
+Parses a `YYYY-MM-DD` date string. Only the first 10 characters are used during parsing (`v.slice(0, 10)`), so longer ISO strings are also accepted. Serializes with `Date.toISOString().slice(0, 10)`.
+
+| URL param | JS value |
+|-----------|----------|
+| `?date=2024-01-15` | `Date` (midnight UTC Jan 15 2024) |
+| `?date=2024-01-15T12:00:00Z` | `Date` (midnight UTC Jan 15 2024) |
+| `?date=invalid` | `null` |
+
+```typescript
+const [dob, setDob] = createQueryState(
+  "date",
+  parseAsIsoDate.withDefault(new Date("2024-01-01"))
+);
+```
+
+---
+
+## Enum and literal parsers
+
+These are factory functions — call them with an array of valid values to get a `SingleParserBuilder`.
+
+### `parseAsStringLiteral(validValues)`
+
+Validates that the URL string is one of the provided literal values. Returns `null` if the value is not in the list.
+
+```typescript
+function parseAsStringLiteral<Literal extends string>(
+  validValues: readonly Literal[]
+): SingleParserBuilder<Literal>
+```
+
+```typescript
+const STATUS_VALUES = ["active", "inactive", "pending"] as const;
+
+const [status, setStatus] = createQueryState(
+  "status",
+  parseAsStringLiteral(STATUS_VALUES).withDefault("active")
+);
+// status() is "active" | "inactive" | "pending"
+```
+
+---
+
+### `parseAsStringEnum(validValues)`
+
+Alias for `parseAsStringLiteral` that accepts a non-const (mutable) array. Use this when working with TypeScript `enum` values or arrays not declared `as const`.
+
+```typescript
+function parseAsStringEnum<Enum extends string>(
+  validValues: Enum[]
+): SingleParserBuilder<Enum>
+```
+
+```typescript
+enum Direction {
+  North = "north",
+  South = "south",
+  East = "east",
+  West = "west",
+}
+
+const [direction, setDirection] = createQueryState(
+  "dir",
+  parseAsStringEnum(Object.values(Direction)).withDefault(Direction.North)
+);
+```
+
+---
+
+### `parseAsNumberLiteral(validValues)`
+
+Validates that the URL value, when parsed as a float, is one of the provided numeric literals. Returns `null` if not found.
+
+```typescript
+function parseAsNumberLiteral<Literal extends number>(
+  validValues: readonly Literal[]
+): SingleParserBuilder<Literal>
+```
+
+```typescript
+const ZOOM_LEVELS = [0.5, 1, 1.5, 2] as const;
+
+const [zoom, setZoom] = createQueryState(
+  "zoom",
+  parseAsNumberLiteral(ZOOM_LEVELS).withDefault(1)
+);
+// zoom() is 0.5 | 1 | 1.5 | 2
+```
+
+---
+
+## Array parser
+
+### `parseAsArrayOf(itemParser, separator?)`
+
+Parses a delimiter-separated list where each item is parsed by `itemParser`. Returns an `ItemType[]`.
+
+```typescript
+function parseAsArrayOf<ItemType>(
+  itemParser: SingleParser<ItemType>,
+  separator?: string  // defaults to ","
+): SingleParserBuilder<ItemType[]>
+```
+
+<ParamField path="itemParser" type="SingleParser<ItemType>" required>
+  Any single-value parser (built-in or custom). Each segment of the split string is passed through `itemParser.parse`.
+</ParamField>
+
+<ParamField path="separator" type="string" default=",">
+  The delimiter character used to split the URL value. If the separator appears inside a value, it is percent-encoded automatically during serialization and decoded during parsing.
+</ParamField>
+
+**Behavior:**
+- Empty string (`?tags=`) → `[]`
+- Items that fail `itemParser.parse` (return `null`) are filtered out silently.
+- Equality is checked element-by-element using the item parser's `eq` function (or `===` by default).
+
+```typescript
+// String array
+const [tags, setTags] = createQueryState(
+  "tags",
+  parseAsArrayOf(parseAsString).withDefault([])
+);
+// ?tags=react,solid,vue  →  ["react", "solid", "vue"]
+
+setTags(["react", "solid"]);
+// URL becomes ?tags=react%2Csolid (commas in values are encoded)
+```
+
+```typescript
+// Integer array with custom separator
+const [ids, setIds] = createQueryState(
+  "ids",
+  parseAsArrayOf(parseAsInteger, "|").withDefault([])
+);
+// ?ids=1|2|3  →  [1, 2, 3]
+```
+
+```typescript
+// Enum array
+const ROLES = ["admin", "editor", "viewer"] as const;
+
+const [roles, setRoles] = createQueryState(
+  "roles",
+  parseAsArrayOf(parseAsStringLiteral(ROLES)).withDefault([])
+);
+// ?roles=admin,viewer  →  ["admin", "viewer"]
+```
+
+---
+
+## `inferParserType` utility type
+
+Extract the TypeScript type that a parser (or map of parsers) produces, accounting for whether a default value has been set.
+
+```typescript
+export type inferParserType<Input> =
+  Input extends GenericParserBuilder<infer Value>
+    ? Input extends { defaultValue: NonNullable<Value> }
+      ? NonNullable<Value>
+      : Value | null
+    : Input extends Record<string, GenericParserBuilder<unknown>>
+      ? {
+          [K in keyof Input]: Input[K] extends GenericParserBuilder<infer V>
+            ? Input[K] extends { defaultValue: NonNullable<V> }
+              ? NonNullable<V>
+              : V | null
+            : never;
+        }
+      : never;
+```
+
+**Single parser:**
+
+```typescript
+import { parseAsInteger, inferParserType } from "./nuqs";
+
+type A = inferParserType<typeof parseAsInteger>;
+// number | null
+
+type B = inferParserType<ReturnType<typeof parseAsInteger.withDefault>>;
+// number
+```
+
+**Parser map (for `createQueryStates`):**
+
+```typescript
+const parsers = {
+  search: parseAsString.withDefault(""),
+  page: parseAsInteger.withDefault(0),
+  active: parseAsBoolean,
+};
+
+type Filters = inferParserType<typeof parsers>;
+// {
+//   search: string;
+//   page: number;
+//   active: boolean | null;
+// }
+```

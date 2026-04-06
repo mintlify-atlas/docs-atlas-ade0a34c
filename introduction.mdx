@@ -1,0 +1,102 @@
+---
+title: "Introduction"
+description: "Type-safe URL query string state management for SolidJS via reactive signals."
+---
+
+nuqs for SolidJS brings the nuqs mental model — URL-as-state-store — to SolidJS. Instead of `createSignal` backed by in-memory values, your state lives in the URL search params and is kept in sync reactively. The URL becomes the single source of truth: shareable, bookmarkable, and persistent across page refreshes.
+
+## Why use nuqs for SolidJS?
+
+URL state is underused in most SPA apps. Search inputs, filter panels, pagination cursors, and modal toggles are frequently held in component-local signals that vanish on navigation. nuqs for SolidJS solves this by:
+
+- **Keeping state in the URL** — users can share or bookmark any application state without extra effort.
+- **Staying reactive** — returned accessors are SolidJS signals. Any component that reads them re-renders precisely when the URL changes.
+- **Enforcing types** — every value passes through a parser. Invalid or missing URL params fall back to `null` or a configured default rather than silently passing bad strings to your logic.
+- **Batching URL writes** — multiple simultaneous updates are coalesced into one `history.replaceState` / `history.pushState` call, avoiding browser History API rate-limit errors.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Reactive signals" icon="bolt">
+    `createQueryState` and `createQueryStates` return SolidJS accessor/setter pairs. Reading state inside a computation or JSX is automatically tracked.
+  </Card>
+  <Card title="Built-in parsers" icon="code">
+    Ship with parsers for strings, integers, floats, booleans, dates, hex, enums, string literals, number literals, and arrays — all zero-config.
+  </Card>
+  <Card title="Custom parsers" icon="sliders">
+    `createParser` and `createMultiParser` let you define your own `parse` / `serialize` / `eq` logic for any data shape.
+  </Card>
+  <Card title="History control" icon="clock-rotate-left">
+    Choose `push` or `replace` per-update. `push` preserves Back-button navigation; `replace` (the default) avoids history pollution for high-frequency updates.
+  </Card>
+  <Card title="Rate limiting" icon="gauge">
+    Throttle or debounce URL writes independently of your UI update rate. Defaults to a 50 ms throttle that keeps you well under browser limits.
+  </Card>
+  <Card title="Defaults & clearing" icon="eraser">
+    `.withDefault(value)` provides a fallback when the key is absent. When a value equals its default, the key is automatically removed from the URL (`clearOnDefault: true` by default).
+  </Card>
+</CardGroup>
+
+## Architecture overview
+
+The library has three layers that work together:
+
+**Adapter (`NuqsAdapter`)** — a context provider placed at the application root. It owns a SolidJS signal for the current `URLSearchParams`, listens to `popstate` events for browser Back/Forward navigation, and exposes an `updateUrl` function used by all state setters. Every `createQueryState` / `createQueryStates` call in the tree communicates with the adapter through this context.
+
+**State hooks (`createQueryState`, `createQueryStates`)** — these are the primary API. `createQueryState` manages a single key; `createQueryStates` manages a named map of keys atomically. Both return a `[accessor, setter]` tuple that mirrors SolidJS's `createSignal` convention. Internally, they use `createSignal`, `createEffect`, and `createMemo` so that reads are tracked and writes propagate correctly.
+
+**Parsers** — stateless objects with a `parse` function (string → `T | null`), an optional `serialize` function (`T` → string), and an optional `eq` comparator. Built-in parsers are exported as `parseAs*` constants. All parsers expose `.withDefault(value)` and `.withOptions(options)` builder methods for fluent configuration.
+
+```
+┌─────────────────────────────────────────────┐
+│                  Your App                   │
+│                                             │
+│  createQueryState("q", parseAsString)       │
+│         ↓ reads / writes                    │
+│  ┌──────────────────────────────────────┐   │
+│  │         NuqsAdapter context          │   │
+│  │  - URLSearchParams signal            │   │
+│  │  - popstate listener                 │   │
+│  │  - throttled history.pushState /     │   │
+│  │    replaceState                      │   │
+│  └──────────────────────────────────────┘   │
+│         ↓ reflects in                       │
+│           window.location.search            │
+└─────────────────────────────────────────────┘
+```
+
+## Exports at a glance
+
+| Export | Kind | Purpose |
+|---|---|---|
+| `NuqsAdapter` | Component | Root provider — required |
+| `createQueryState` | Function | Single URL key as a signal |
+| `createQueryStates` | Function | Multiple URL keys as a signal map |
+| `parseAsString` | Parser | Raw string passthrough |
+| `parseAsInteger` | Parser | Integer (`parseInt`) |
+| `parseAsFloat` | Parser | Floating-point (`parseFloat`) |
+| `parseAsBoolean` | Parser | `"true"` / `"false"` |
+| `parseAsTimestamp` | Parser | Unix ms timestamp → `Date` |
+| `parseAsIsoDateTime` | Parser | ISO 8601 datetime → `Date` |
+| `parseAsIsoDate` | Parser | ISO 8601 date → `Date` |
+| `parseAsHex` | Parser | Hexadecimal number |
+| `parseAsIndex` | Parser | 1-based URL index → 0-based value |
+| `parseAsStringLiteral` | Factory | Union of string literals |
+| `parseAsStringEnum` | Factory | TypeScript string enum |
+| `parseAsNumberLiteral` | Factory | Union of number literals |
+| `parseAsArrayOf` | Factory | Comma-separated array |
+| `createParser` | Factory | Custom single-value parser |
+| `createMultiParser` | Factory | Custom multi-value parser |
+| `throttle` / `debounce` | Helpers | Rate-limit URL writes |
+| `defaultRateLimit` | Constant | Default rate-limit config (`throttle`, 50ms) |
+| `HistoryOptions` | Type | `"replace" \| "push"` |
+| `Options` | Type | Full options object type |
+| `SearchParams` | Type | `Record<string, string \| string[] \| undefined>` |
+| `UrlKeys` | Type | URL key remapping type for `createQueryStates` |
+| `Nullable` | Type | Makes all keys in a type nullable |
+| `UseQueryStatesKeysMap` | Type | Key map type for `createQueryStates` |
+| `inferParserType` | Type | Infers the value type from a parser or parser map |
+
+<Note>
+The package (`solid-js-nuqs-variant`) is not yet published to npm. Integration is done at the source level — copy or reference the `src/nuqs/` directory directly. See [Installation](/installation) for details.
+</Note>

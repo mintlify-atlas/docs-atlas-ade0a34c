@@ -1,0 +1,179 @@
+---
+title: "Adapters"
+description: "The NuqsAdapter bridges SolidJS reactivity with the browser's URL and history APIs."
+---
+
+nuqs does not read or write the URL directly from inside `createQueryState`. Instead, all URL interactions are delegated to an **adapter** — a context provider that owns the browser integration. This separation keeps the core library framework-agnostic and makes testing straightforward.
+
+## Why an adapter is required
+
+SolidJS does not have a built-in router, and nuqs does not assume one. The adapter fills that gap:
+
+- It reads `location.search` on mount and exposes it as a reactive signal.
+- It subscribes to `popstate` events so the back and forward buttons keep signals in sync.
+- It calls `history.pushState` or `history.replaceState` when a setter is called.
+- It provides default `Options` to every `createQueryState` call in its subtree.
+
+<Warning>
+Every application using nuqs must render `<NuqsAdapter>` above any component that calls `createQueryState` or `createQueryStates`. Without it, nuqs throws:
+
+```
+[nuqs] NuqsAdapter not found. Wrap your app with <NuqsAdapter>
+```
+</Warning>
+
+## Setup
+
+Wrap your application (or the relevant subtree) with `<NuqsAdapter>`:
+
+```tsx
+// index.tsx
+import { render } from "solid-js/web";
+import { NuqsAdapter } from "./nuqs";
+import App from "./App";
+
+render(
+  () => (
+    <NuqsAdapter>
+      <App />
+    </NuqsAdapter>
+  ),
+  document.getElementById("root")!,
+);
+```
+
+## Component signature
+
+```tsx
+export function NuqsAdapter(
+  props: { children: JSX.Element } & {
+    defaultOptions?: Partial<
+      Pick<Options, "scroll" | "clearOnDefault" | "limitUrlUpdates" | "shallow">
+    >;
+    processUrlSearchParams?: (search: URLSearchParams) => URLSearchParams;
+  },
+)
+```
+
+## Props
+
+<ParamField path="children" type="JSX.Element" required>
+  The component subtree that will have access to nuqs state. Typically this is the root `<App />` component.
+</ParamField>
+
+<ParamField path="defaultOptions" type="object">
+  Default `Options` applied to every `createQueryState` and `createQueryStates` call within the subtree. Individual call-site options take precedence over these defaults.
+
+  Supported fields: `scroll`, `clearOnDefault`, `limitUrlUpdates`, `shallow`.
+
+  ```tsx
+  <NuqsAdapter defaultOptions={{ scroll: true, clearOnDefault: false }}>
+    <App />
+  </NuqsAdapter>
+  ```
+</ParamField>
+
+<ParamField path="processUrlSearchParams" type="(search: URLSearchParams) => URLSearchParams">
+  A transform applied to the raw `URLSearchParams` before nuqs reads any values. Use this to filter, rename, or normalize parameters before they reach your signals.
+
+  ```tsx
+  <NuqsAdapter
+    processUrlSearchParams={(params) => {
+      // Strip any parameters injected by analytics or ad platforms
+      params.delete("utm_source");
+      params.delete("utm_medium");
+      return params;
+    }}
+  >
+    <App />
+  </NuqsAdapter>
+  ```
+</ParamField>
+
+## How the adapter works internally
+
+The SolidJS adapter (`NuqsAdapter`) composes three behaviors:
+
+### 1. Reactive search params signal
+
+On mount, the adapter creates a SolidJS signal seeded with the current `location.search`. This signal is what `createQueryState` subscribes to via `createEffect`.
+
+```typescript
+const [searchParams, setSearchParams] = createSignal<URLSearchParams>(
+  new URLSearchParams(location.search),
+);
+```
+
+### 2. `popstate` listener
+
+When the user presses the back or forward button, the browser fires a `popstate` event. The adapter listens for this event and updates the signal with the new search string, which propagates reactively to all components.
+
+```typescript
+const onPopState = () => {
+  setSearchParams((prev) =>
+    applyChange(new URLSearchParams(location.search), watchKeys, false)(prev),
+  );
+};
+window.addEventListener("popstate", onPopState);
+```
+
+### 3. URL writes via History API
+
+When a setter is called, the adapter writes the new URL using either `history.pushState` or `history.replaceState` depending on the `history` option:
+
+```typescript
+const method =
+  options.history === "push"
+    ? history.pushState
+    : history.replaceState;
+
+method.call(history, history.state, "__nuqs", url.toString());
+```
+
+After writing, it emits an internal update event so all other `createQueryState` instances with overlapping keys can update their signals without re-parsing from the URL.
+
+<Tip>
+The adapter sets itself as a module-level global immediately when rendered — before children evaluate. This ensures `createQueryState` can access the adapter even in components that run synchronously during initialization.
+</Tip>
+
+## Scoping the adapter
+
+You do not have to wrap the entire application. You can render `<NuqsAdapter>` around a subtree if only part of your app uses URL state:
+
+```tsx
+function AdminSection() {
+  return (
+    <NuqsAdapter defaultOptions={{ scroll: true, clearOnDefault: false }}>
+      <AdminDashboard />
+    </NuqsAdapter>
+  );
+}
+```
+
+<Note>
+Nesting multiple `<NuqsAdapter>` instances is not recommended. The innermost adapter takes precedence via context, but both adapters will listen to `popstate` independently, which can cause redundant updates.
+</Note>
+
+## Using with a router
+
+If you are using a router (e.g., `@solidjs/router`), place `<NuqsAdapter>` outside the router so it wraps the entire routing tree:
+
+```tsx
+import { Router } from "@solidjs/router";
+import { NuqsAdapter } from "./nuqs";
+
+render(
+  () => (
+    <NuqsAdapter>
+      <Router>
+        <App />
+      </Router>
+    </NuqsAdapter>
+  ),
+  document.getElementById("root")!,
+);
+```
+
+## Key isolation
+
+The adapter tracks which URL keys each `createQueryState` call cares about (`watchKeys`). When the URL updates, only signals subscribed to the changed keys re-evaluate. Unrelated parameters in the URL are preserved unchanged and do not trigger unnecessary re-renders.

@@ -1,0 +1,101 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "nuqs for SolidJS",
+  "projectDescription": "A SolidJS port of nuqs that provides type-safe URL query string state management via reactive primitives.",
+  "theme": "palm",
+  "primaryColor": "#3e6eaf",
+  "lightColor": "#86bce6",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/query-state",
+              "concepts/adapters",
+              "concepts/options"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/rate-limiting",
+              "guides/url-keys",
+              "guides/server-side-parsing",
+              "guides/custom-parsers"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Primitives",
+            "pages": [
+              "api/create-query-state",
+              "api/create-query-states"
+            ]
+          },
+          {
+            "group": "Parsers",
+            "pages": [
+              "api/parsers/built-in",
+              "api/parsers/factory"
+            ]
+          },
+          {
+            "group": "Adapter",
+            "pages": [
+              "api/nuqs-adapter"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Type-safe URL query string state management for SolidJS",
+    "Reactive createQueryState and createQueryStates primitives",
+    "Rich set of built-in parsers (string, integer, boolean, date, enum, array)",
+    "Throttle and debounce URL update rate limiting",
+    "History push/replace control and scroll-to-top support",
+    "NuqsAdapter context provider for SPA integration",
+    "Custom parser factory via createParser and createMultiParser",
+    "clearOnDefault to keep URLs clean when using default values"
+  ],
+  "publicApiSurface": [
+    "createQueryState(key, options)",
+    "createQueryStates(keyMap, options)",
+    "NuqsAdapter",
+    "parseAsString",
+    "parseAsInteger",
+    "parseAsIndex",
+    "parseAsFloat",
+    "parseAsHex",
+    "parseAsBoolean",
+    "parseAsTimestamp",
+    "parseAsIsoDateTime",
+    "parseAsIsoDate",
+    "parseAsStringLiteral(validValues)",
+    "parseAsStringEnum(validValues)",
+    "parseAsNumberLiteral(validValues)",
+    "parseAsArrayOf(itemParser, separator?)",
+    "createParser(parser)",
+    "createMultiParser(parser)",
+    "throttle(timeMs)",
+    "debounce(timeMs)",
+    "inferParserType<Input>"
+  ]
+}

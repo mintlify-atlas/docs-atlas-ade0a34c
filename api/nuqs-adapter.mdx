@@ -1,0 +1,189 @@
+---
+title: "NuqsAdapter"
+description: "Context provider that connects nuqs for SolidJS to the browser URL"
+---
+
+`NuqsAdapter` is a component that must wrap your application (or the subtree that uses nuqs). It bridges SolidJS's reactive signal system to the browser's `history` API and fires updates across all `createQueryState` / `createQueryStates` calls in the tree whenever the URL changes.
+
+```tsx
+import { NuqsAdapter } from "./nuqs";
+```
+
+---
+
+## Overview
+
+When `NuqsAdapter` mounts it:
+
+1. Reads the current `location.search` and makes it available to all descendant query state hooks.
+2. Listens for `popstate` events (browser Back/Forward navigation) and propagates URL changes reactively.
+3. Emits internal update events so that multiple `createQueryState` calls targeting different keys stay in sync within the same URL update batch.
+4. Exposes `defaultOptions` that are merged into every `createQueryState` / `createQueryStates` call in the subtree, letting you set site-wide defaults (e.g. always use `history: "push"`) without repeating them everywhere.
+
+<Warning>
+  `NuqsAdapter` relies on `history.pushState`, `history.replaceState`, and the `popstate` event. It is designed for **single-page applications only** and has no server-side rendering integration.
+</Warning>
+
+---
+
+## Setup
+
+Place `NuqsAdapter` at the root of your application, wrapping everything that needs access to URL query state:
+
+```tsx
+import { render } from "solid-js/web";
+import { NuqsAdapter } from "./nuqs";
+import App from "./App.tsx";
+
+const root = document.getElementById("root");
+
+render(
+  () => (
+    <NuqsAdapter>
+      <App />
+    </NuqsAdapter>
+  ),
+  root!,
+);
+```
+
+<Note>
+  In SolidJS, child components may be evaluated before the parent `Provider` runs. `NuqsAdapter` accounts for this by calling `setGlobalAdapterValue` synchronously before rendering children, so query state is available immediately.
+</Note>
+
+---
+
+## Signature
+
+```tsx
+function NuqsAdapter(
+  props: {
+    children: JSX.Element;
+    defaultOptions?: Partial<
+      Pick<Options, "scroll" | "clearOnDefault" | "limitUrlUpdates" | "shallow">
+    >;
+    processUrlSearchParams?: (search: URLSearchParams) => URLSearchParams;
+  }
+): JSX.Element
+```
+
+---
+
+## Props
+
+<ParamField path="children" type="JSX.Element" required>
+  The child component tree. All `createQueryState` and `createQueryStates` calls inside `children` will be connected to the browser URL through this adapter.
+</ParamField>
+
+<ParamField path="defaultOptions" type="Partial<Pick<Options, 'scroll' | 'clearOnDefault' | 'limitUrlUpdates' | 'shallow'>>">
+  Default options applied to every `createQueryState` and `createQueryStates` call within the subtree. Options set on an individual call override the corresponding `defaultOptions` values.
+
+  Only a subset of `Options` is accepted at the adapter level:
+
+  <Expandable title="Supported fields">
+    <ResponseField name="scroll" type="boolean" default="false">
+      Scroll to the top of the page after each URL update.
+    </ResponseField>
+    <ResponseField name="shallow" type="boolean" default="true">
+      Keep updates client-side only. Has no effect in a Solid SPA (included for API consistency).
+    </ResponseField>
+    <ResponseField name="limitUrlUpdates" type="LimitUrlUpdates">
+      Default rate-limiting strategy for all hooks. Accepts `{ method: "debounce", timeMs: number }` or `{ method: "throttle", timeMs: number }`. Individual hooks can override this per-call.
+    </ResponseField>
+    <ResponseField name="clearOnDefault" type="boolean" default="true">
+      Remove a key from the URL when its value equals the parser's default. Keeps URLs clean by omitting parameters that carry no information.
+    </ResponseField>
+  </Expandable>
+
+  <Note>
+    `history` and `throttleMs` are **not** configurable at the adapter level. Set them per-parser via `.withOptions()` or per-call via the setter's second argument.
+  </Note>
+</ParamField>
+
+<ParamField path="processUrlSearchParams" type="(search: URLSearchParams) => URLSearchParams">
+  A function that transforms the `URLSearchParams` before nuqs reads them. Runs on every URL change, including `popstate` events and programmatic updates. Useful for stripping internal or third-party tracking parameters so they don't interfere with your query state.
+</ParamField>
+
+---
+
+## Examples
+
+### Setting global `defaultOptions`
+
+Use `defaultOptions` to establish site-wide behavior without repeating options on every `createQueryState` call:
+
+```tsx
+<NuqsAdapter defaultOptions={{ scroll: false, clearOnDefault: true }}>
+  <App />
+</NuqsAdapter>
+```
+
+Any `createQueryState` call inside `App` will use `scroll: false` and `clearOnDefault: true` unless it provides its own conflicting options:
+
+```tsx
+// Uses the clearOnDefault: true from NuqsAdapter defaultOptions
+const [search, setSearch] = createQueryState("search", parseAsString);
+
+// Overrides per-parser — clearOnDefault: false wins for this hook
+const [debug, setDebug] = createQueryState(
+  "debug",
+  parseAsBoolean.withDefault(false).withOptions({ clearOnDefault: false })
+);
+```
+
+---
+
+### Stripping internal URL parameters
+
+Use `processUrlSearchParams` to remove parameters that should not be part of your query state, such as OAuth callback codes, UTM tracking parameters, or feature flags injected by a CDN:
+
+```tsx
+<NuqsAdapter
+  processUrlSearchParams={(search) => {
+    // Remove OAuth callback params before nuqs reads the URL
+    const cleaned = new URLSearchParams(search);
+    cleaned.delete("code");
+    cleaned.delete("state");
+    return cleaned;
+  }}
+>
+  <App />
+</NuqsAdapter>
+```
+
+<Tip>
+  `processUrlSearchParams` only affects what nuqs reads. The actual browser URL is unchanged — the parameters are still visible in `location.search`. If you also want to remove them from the URL bar, update the URL inside this function or use a one-time `history.replaceState` call on mount.
+</Tip>
+
+---
+
+### Combining both props
+
+```tsx
+<NuqsAdapter
+  defaultOptions={{ scroll: false, clearOnDefault: true }}
+  processUrlSearchParams={(search) => {
+    const cleaned = new URLSearchParams(search);
+    // Strip UTM params
+    for (const key of [...cleaned.keys()]) {
+      if (key.startsWith("utm_")) cleaned.delete(key);
+    }
+    return cleaned;
+  }}
+>
+  <App />
+</NuqsAdapter>
+```
+
+---
+
+## How it works internally
+
+`NuqsAdapter` wraps a `SolidAdapterProvider` that exposes the `useSolidAdapter` hook to all descendants via context. The hook:
+
+1. Creates a `createSignal<URLSearchParams>` initialised from `location.search`.
+2. Registers a `popstate` listener in a `createEffect` that updates the signal when the user navigates with the browser Back/Forward buttons.
+3. Subscribes to an internal emitter so that programmatic URL changes (from `setQueryState` calls) are reflected in all sibling and descendant query states without requiring a full page navigation.
+4. Exposes an `updateUrl` function that calls `history.pushState` or `history.replaceState` and emits the update event.
+
+Because `setGlobalAdapterValue` is called synchronously at the top of `NuqsAdapter`, children that are evaluated eagerly by SolidJS (before the `Provider` context is established) can still access the adapter.

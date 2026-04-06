@@ -1,0 +1,227 @@
+---
+title: "Custom Parsers"
+description: "Build your own type-safe parsers using createParser and createMultiParser, and compose them with the built-in parser builder chain."
+---
+
+nuqs ships with a broad set of built-in parsers for common types, but you can create your own for any value that can be serialized as a URL string. Two factory functions cover the full range of use cases: `createParser` for single-value params and `createMultiParser` for multi-value params.
+
+## `createParser`
+
+`createParser` wraps a `parse` / `serialize` pair and returns a `SingleParserBuilder<T>` — the same type used by all built-in parsers. This means your custom parser supports the full `.withDefault()` / `.withOptions()` chain out of the box.
+
+```typescript
+function createParser<T>(parser: {
+  parse: (value: string) => T | null;
+  serialize: (value: T) => string;
+  eq?: (a: T, b: T) => boolean;
+}): SingleParserBuilder<T>
+```
+
+### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `parse` | Yes | Converts a raw URL string to `T`. Return `null` if the string is invalid or cannot be parsed. |
+| `serialize` | Yes | Converts a `T` value back to a URL string. |
+| `eq` | No | Custom equality check used by `clearOnDefault`. Defaults to `===`. |
+
+### Example: JSON object parser
+
+```typescript
+import { createParser } from "./nuqs";
+
+const parseAsJsonObject = createParser({
+  parse: (value) => {
+    try {
+      return JSON.parse(value) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  },
+  serialize: (value) => JSON.stringify(value),
+});
+
+// Usage
+const [filters, setFilters] = createQueryState(
+  "filters",
+  parseAsJsonObject.withDefault({}),
+);
+```
+
+### Example: hex color parser
+
+The built-in `parseAsHex` parser is a good reference for numeric serialization with a custom radix:
+
+```typescript
+export const parseAsHex = createParser({
+  parse: (v) => {
+    const int = parseInt(v, 16);
+    return int == int ? int : null; // NaN check via self-comparison
+  },
+  serialize: (v) => {
+    const hex = Math.round(v).toString(16);
+    return (hex.length & 1 ? "0" : "") + hex; // zero-pad to even length
+  },
+});
+```
+
+### Example: custom equality for objects
+
+When your parser returns objects or arrays, reference equality (`===`) will always be `false` even when the values are deeply equal. Provide a custom `eq` function to prevent unnecessary URL writes when the value hasn't actually changed:
+
+```typescript
+import { createParser } from "./nuqs";
+
+type DateRange = { from: Date; to: Date };
+
+const parseAsDateRange = createParser<DateRange>({
+  parse: (value) => {
+    const [from, to] = value.split("_");
+    const fromDate = from ? new Date(from) : null;
+    const toDate = to ? new Date(to) : null;
+    if (!fromDate || !toDate) return null;
+    if (isNaN(fromDate.valueOf()) || isNaN(toDate.valueOf())) return null;
+    return { from: fromDate, to: toDate };
+  },
+  serialize: ({ from, to }) =>
+    `${from.toISOString().slice(0, 10)}_${to.toISOString().slice(0, 10)}`,
+  eq: (a, b) =>
+    a.from.valueOf() === b.from.valueOf() &&
+    a.to.valueOf() === b.to.valueOf(),
+});
+```
+
+## `createMultiParser`
+
+Use `createMultiParser` when a URL parameter appears multiple times in the query string (e.g. `?tag=a&tag=b&tag=c`). It receives all values as an array and serializes back to an array.
+
+```typescript
+function createMultiParser<T>(parser: {
+  parse: (values: ReadonlyArray<string>) => T | null;
+  serialize?: (value: T) => Array<string>;
+  eq?: (a: T, b: T) => boolean;
+}): MultiParserBuilder<T>
+```
+
+### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `parse` | Yes | Converts an array of raw URL strings to `T`. Return `null` if the input is invalid. |
+| `serialize` | No | Converts a `T` value back to an array of strings. Defaults to `[String(value)]`. |
+| `eq` | No | Custom equality check. Defaults to `===`. |
+
+### Example: multi-select tags
+
+```typescript
+import { createMultiParser, createQueryState } from "./nuqs";
+
+const parseAsTags = createMultiParser({
+  parse: (values) => values.filter(Boolean),
+  serialize: (tags) => tags,
+  eq: (a, b) =>
+    a.length === b.length && a.every((tag, i) => tag === b[i]),
+});
+
+// URL: ?tag=solid&tag=react&tag=vue
+const [tags, setTags] = createQueryState("tag", parseAsTags.withDefault([]));
+```
+
+## The parser builder chain
+
+Both `createParser` and `createMultiParser` return a builder object that supports method chaining.
+
+### `.withDefault(value)`
+
+Sets a default value for the parser. When the URL parameter is absent or invalid, the state will return this value instead of `null`.
+
+```typescript
+const parseAsPage = createParser({
+  parse: (v) => {
+    const n = parseInt(v);
+    return n > 0 ? n : null;
+  },
+  serialize: String,
+});
+
+// Without default: returns number | null
+const [page, setPage] = createQueryState("page", parseAsPage);
+
+// With default: returns number (never null)
+const [page, setPage] = createQueryState("page", parseAsPage.withDefault(1));
+```
+
+Calling `.withDefault()` also affects the TypeScript return type — the signal accessor narrows from `() => T | null` to `() => T`.
+
+### `.withOptions(options)`
+
+Applies default hook options to the parser. Any option from the `Options` type is accepted: `history`, `scroll`, `shallow`, `throttleMs`, `limitUrlUpdates`, `clearOnDefault`.
+
+```typescript
+import { debounce } from "./nuqs";
+
+const parseAsSearchQuery = parseAsString.withOptions({
+  limitUrlUpdates: debounce(300),
+  history: "replace",
+});
+
+const [query, setQuery] = createQueryState("q", parseAsSearchQuery);
+```
+
+These options serve as defaults and can be overridden at the call site.
+
+### Chaining both
+
+`.withDefault()` and `.withOptions()` can be chained in either order:
+
+```typescript
+const parser = parseAsInteger
+  .withDefault(1)
+  .withOptions({ history: "push" });
+```
+
+<Note>
+After calling `.withDefault()`, the `parseServerSide` method on the returned builder returns the default value instead of `null` when the input is absent. See the [Server-Side Parsing](/guides/server-side-parsing) guide for details.
+</Note>
+
+## Using the built-in parsers as reference
+
+The source code for all built-in parsers is a useful reference when building your own. Here is a selection:
+
+<Tabs>
+  <Tab title="parseAsBoolean">
+    ```typescript
+    export const parseAsBoolean = createParser({
+      parse: (v) => v.toLowerCase() === "true",
+      serialize: String,
+    });
+    ```
+  </Tab>
+  <Tab title="parseAsIsoDateTime">
+    ```typescript
+    export const parseAsIsoDateTime = createParser({
+      parse: (v) => {
+        const date = new Date(v);
+        return date.valueOf() == date.valueOf() ? date : null;
+      },
+      serialize: (v: Date) => v.toISOString(),
+      eq: (a, b) => a.valueOf() === b.valueOf(),
+    });
+    ```
+  </Tab>
+  <Tab title="parseAsStringLiteral">
+    ```typescript
+    export function parseAsStringLiteral<Literal extends string>(
+      validValues: readonly Literal[],
+    ): SingleParserBuilder<Literal> {
+      return createParser({
+        parse: (query: string) => {
+          const asConst = query as unknown as Literal;
+          return validValues.includes(asConst) ? asConst : null;
+        },
+        serialize: String,
+      });
+    }
+    ```
+  </Tab>
+</Tabs>

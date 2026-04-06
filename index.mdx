@@ -1,97 +1,99 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "nuqs for SolidJS"
+description: "Type-safe URL query string state management for SolidJS — reactive primitives that keep your UI in sync with the URL."
 ---
 
-## Setting up
+nuqs for SolidJS brings type-safe URL search parameter management to [SolidJS](https://solidjs.com). It lets you treat URL query strings as reactive signals — reading and writing them like any other SolidJS state, with full type safety and built-in parsers for common data types.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get a working URL-synced state in under 5 minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="box" href="/installation">
+    Add nuqs for SolidJS to your project
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Core Concepts" icon="lightbulb" href="/concepts/query-state">
+    Understand how query state works
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/create-query-state">
+    Explore every primitive and parser
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why nuqs for SolidJS?
 
-Everything you need to create world-class documentation.
+URL query strings are the natural home for shareable, bookmarkable UI state — search terms, filters, pagination, and tabs. But parsing them safely and keeping them in sync with your reactive UI is tedious. nuqs for SolidJS handles that for you.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Reactive signals" icon="bolt">
+    `createQueryState` returns a SolidJS signal accessor and setter — works exactly like `createSignal` but backed by the URL.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Type-safe parsers" icon="shield-check">
+    Built-in parsers for strings, numbers, booleans, dates, enums, and arrays. Or build your own with `createParser`.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Rate limiting" icon="gauge">
+    Throttle or debounce URL updates to stay within browser History API limits without sacrificing UX.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="History control" icon="clock-rotate-left">
+    Choose between `push` (adds history entry) and `replace` (default) per update.
   </Card>
-</Columns>
+</CardGroup>
 
-## Need inspiration?
+## How it works
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Steps>
+  <Step title="Wrap your app with NuqsAdapter">
+    Add the context provider once at your app root. It sets up URL observation and cross-component sync.
+
+    ```tsx src/index.tsx
+    import { render } from "solid-js/web";
+    import { NuqsAdapter } from "./nuqs";
+    import App from "./App";
+
+    render(
+      () => (
+        <NuqsAdapter>
+          <App />
+        </NuqsAdapter>
+      ),
+      document.getElementById("root")!,
+    );
+    ```
+  </Step>
+  <Step title="Declare URL-backed state">
+    Use `createQueryState` in any component — it reads from and writes to the URL automatically.
+
+    ```tsx
+    import { createQueryState, parseAsString, parseAsInteger } from "./nuqs";
+
+    function SearchPage() {
+      const [query, setQuery] = createQueryState("q", parseAsString);
+      const [page, setPage] = createQueryState("page", parseAsInteger.withDefault(1));
+
+      return (
+        <div>
+          <input
+            value={query() ?? ""}
+            onInput={(e) => setQuery(e.currentTarget.value || null)}
+          />
+          <p>Page {page()}</p>
+        </div>
+      );
+    }
+    ```
+  </Step>
+  <Step title="Sync multiple params together">
+    Use `createQueryStates` to batch multiple URL parameters into a single reactive object — updates are batched into one history entry.
+
+    ```tsx
+    const [filters, setFilters] = createQueryStates({
+      search: parseAsString.withDefault(""),
+      page: parseAsInteger.withDefault(1),
+    }, { history: "replace" });
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  All URL updates are throttled to 50 ms by default to respect browser History API rate limits. See [Rate Limiting](/guides/rate-limiting) to customize this behavior.
+</Tip>

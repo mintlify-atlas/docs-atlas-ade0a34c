@@ -1,0 +1,128 @@
+---
+title: "URL Key Mapping"
+description: "Map internal state keys to different URL parameter names using the urlKeys option in createQueryStates."
+---
+
+By default, `createQueryStates` uses your JavaScript object keys as URL parameter names. The `urlKeys` option lets you decouple the two — keeping your code readable while producing concise, clean URLs.
+
+## The `urlKeys` option
+
+The `urlKeys` option accepts a partial record mapping state keys to their corresponding URL parameter names:
+
+```typescript
+type UrlKeys<T extends Record<string, string>> = Partial<Record<keyof T, string>>
+```
+
+Because it is `Partial`, you only need to specify the keys you want to remap. Any key you omit will continue to use the state key as its URL parameter name.
+
+## Basic usage
+
+```tsx
+import {
+  createQueryStates,
+  parseAsString,
+  parseAsInteger,
+} from "./nuqs";
+
+const [filters, setFilters] = createQueryStates(
+  {
+    searchQuery: parseAsString.withDefault(""),
+    currentPage: parseAsInteger.withDefault(1),
+  },
+  {
+    urlKeys: {
+      searchQuery: "q",
+      currentPage: "p",
+    },
+  },
+);
+
+// URL becomes: ?q=hello&p=2
+// Code uses:   filters().searchQuery, filters().currentPage
+```
+
+The state object your code reads from uses the original JavaScript key names (`searchQuery`, `currentPage`). Only the URL representation changes.
+
+## When to use URL key mapping
+
+<Tabs>
+  <Tab title="Shorter URLs">
+    Long descriptive key names are great for code readability but produce verbose URLs. Mapping them to single-letter or abbreviated params keeps URLs shareable and clean.
+
+    ```tsx
+    const [state, setState] = createQueryStates(
+      {
+        selectedCategory: parseAsString.withDefault("all"),
+        sortDirection: parseAsString.withDefault("asc"),
+        itemsPerPage: parseAsInteger.withDefault(20),
+      },
+      {
+        urlKeys: {
+          selectedCategory: "cat",
+          sortDirection: "dir",
+          itemsPerPage: "per",
+        },
+      },
+    );
+    // ?cat=electronics&dir=desc&per=50
+    ```
+  </Tab>
+  <Tab title="API compatibility">
+    When your URL parameters need to match a specific format expected by a backend API or external integration, `urlKeys` lets you conform to that contract without compromising internal naming conventions.
+
+    ```tsx
+    // Backend expects: ?sort_by=name&page_number=2
+    const [pagination, setPagination] = createQueryStates(
+      {
+        sortBy: parseAsString.withDefault("createdAt"),
+        pageNumber: parseAsInteger.withDefault(1),
+      },
+      {
+        urlKeys: {
+          sortBy: "sort_by",
+          pageNumber: "page_number",
+        },
+      },
+    );
+    ```
+  </Tab>
+</Tabs>
+
+## Partial remapping
+
+You don't have to remap every key. Only the entries you include in `urlKeys` are affected:
+
+```tsx
+const [state, setState] = createQueryStates(
+  {
+    query: parseAsString.withDefault(""),   // URL key: "query" (unchanged)
+    page: parseAsInteger.withDefault(1),    // URL key: "p"     (remapped)
+    sort: parseAsString.withDefault("asc"), // URL key: "sort"  (unchanged)
+  },
+  {
+    urlKeys: {
+      page: "p",
+    },
+  },
+);
+// URL: ?query=hello&p=2&sort=desc
+```
+
+## Accessing state
+
+Regardless of how keys are mapped in the URL, you always access state using the original JavaScript key names:
+
+```tsx
+// Reading
+const currentPage = filters().currentPage;
+const searchTerm = filters().searchQuery;
+
+// Writing
+setFilters({ currentPage: 3 });
+setFilters({ searchQuery: "solid" });
+setFilters({ searchQuery: "solid", currentPage: 1 });
+```
+
+<Note>
+URL key mapping only applies to `createQueryStates`. The single-key `createQueryState` hook takes the URL key directly as its first argument, so there is no `urlKeys` option.
+</Note>

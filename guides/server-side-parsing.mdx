@@ -1,0 +1,153 @@
+---
+title: "Server-Side Parsing"
+description: "Use parseServerSide to read and parse URL query parameters outside of components, in SSR contexts, or in server functions."
+---
+
+Every parser builder exposes a `parseServerSide` method that lets you parse URL query parameters outside of SolidJS components. This is the correct way to read typed query state in server-side rendering (SSR) contexts, route loaders, or any code that runs outside the reactive component tree.
+
+## The `parseServerSide` method
+
+The method signature is the same on every parser builder:
+
+```typescript
+parseServerSide(value: string | string[] | undefined): T | null
+```
+
+It accepts the raw value that comes back from `URLSearchParams.get()` or `URLSearchParams.getAll()`, and returns a typed value or `null` if the parameter is absent or cannot be parsed.
+
+### How it handles each input type
+
+| Input | Behavior |
+|-------|----------|
+| `undefined` | Returns `null` (parameter not present) |
+| `string` | Parses the string using the parser's `parse` function |
+| `string[]` | Takes the first element and parses it (single parsers only) |
+
+## Basic usage
+
+```typescript
+import { parseAsInteger, parseAsString } from "./nuqs";
+
+const url = new URL(request.url);
+
+// Parse a single numeric param — returns number | null
+const page = parseAsInteger.parseServerSide(
+  url.searchParams.get("page") ?? undefined
+);
+
+// Parse a string param — returns string | null
+const query = parseAsString.parseServerSide(
+  url.searchParams.get("q") ?? undefined
+);
+```
+
+<Note>
+`URLSearchParams.get()` returns `null` when the key is absent. `parseServerSide` expects `undefined` for absent values, so use `?? undefined` to convert between the two.
+</Note>
+
+## Using `withDefault`
+
+When you chain `.withDefault(value)`, the `parseServerSide` method returns the default value instead of `null` for absent or invalid parameters:
+
+```typescript
+import { parseAsInteger } from "./nuqs";
+
+const url = new URL(request.url);
+
+// withDefault(1) means: return 1 if "page" is missing or invalid
+const page = parseAsInteger
+  .withDefault(1)
+  .parseServerSide(url.searchParams.get("page") ?? undefined);
+// page is always a number — never null
+```
+
+<Tip>
+When you call `.withDefault()`, the TypeScript return type of `parseServerSide` narrows from `T | null` to `T`, reflecting that a fallback value is always available.
+</Tip>
+
+## Practical example: route loader
+
+```typescript
+import { parseAsString, parseAsInteger } from "./nuqs";
+
+export async function loadSearchResults(request: Request) {
+  const url = new URL(request.url);
+  const params = url.searchParams;
+
+  const query = parseAsString.parseServerSide(
+    params.get("q") ?? undefined
+  );
+  const page = parseAsInteger
+    .withDefault(1)
+    .parseServerSide(params.get("page") ?? undefined);
+  const perPage = parseAsInteger
+    .withDefault(20)
+    .parseServerSide(params.get("per") ?? undefined);
+
+  if (!query) {
+    return { results: [], total: 0, page, perPage };
+  }
+
+  return fetchResults({ query, page, perPage });
+}
+```
+
+## `inferParserType` utility type
+
+`inferParserType` is a TypeScript utility type that extracts the value type produced by a parser builder. It correctly handles the presence or absence of a `defaultValue`:
+
+```typescript
+export type inferParserType<Input> =
+  Input extends GenericParserBuilder<infer Value>
+    ? Input extends { defaultValue: NonNullable<Value> }
+      ? NonNullable<Value>          // has default → never null
+      : Value | null                // no default  → can be null
+    : Input extends Record<string, GenericParserBuilder<unknown>>
+      ? {
+          [K in keyof Input]: Input[K] extends GenericParserBuilder<infer V>
+            ? Input[K] extends { defaultValue: NonNullable<V> }
+              ? NonNullable<V>
+              : V | null
+            : never;
+        }
+      : never;
+```
+
+### Single parser inference
+
+```typescript
+import { parseAsInteger, parseAsString, type inferParserType } from "./nuqs";
+
+// No default: type is number | null
+type PageValue = inferParserType<typeof parseAsInteger>;
+
+// With default: type is number (never null)
+const pageParser = parseAsInteger.withDefault(1);
+type PageWithDefault = inferParserType<typeof pageParser>;
+
+// Works with string parsers too
+const queryParser = parseAsString.withDefault("");
+type QueryValue = inferParserType<typeof queryParser>; // string
+```
+
+### Key-map inference (for `createQueryStates`)
+
+`inferParserType` also works with a record of parsers, making it convenient for typing the output of `createQueryStates`:
+
+```typescript
+import {
+  parseAsString,
+  parseAsInteger,
+  type inferParserType,
+} from "./nuqs";
+
+const filtersKeyMap = {
+  searchQuery: parseAsString.withDefault(""),
+  currentPage: parseAsInteger.withDefault(1),
+};
+
+// Infers { searchQuery: string; currentPage: number }
+type FiltersState = inferParserType<typeof filtersKeyMap>;
+```
+
+This is useful when you want to share a parser key map between a route loader (for server-side parsing) and a component (for reactive state), while keeping the types in sync automatically.

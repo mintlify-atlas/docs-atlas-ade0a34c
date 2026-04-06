@@ -1,0 +1,309 @@
+---
+title: "Parser Factory"
+description: "Create custom parsers with createParser and createMultiParser"
+---
+
+When the built-in parsers don't cover your use case, use `createParser` or `createMultiParser` to define a fully typed, reusable parser that integrates seamlessly with `createQueryState` and `createQueryStates`.
+
+```typescript
+import { createParser, createMultiParser } from "./nuqs";
+```
+
+---
+
+## `createParser<T>`
+
+Creates a parser for a **single** URL parameter value — one key maps to one string in the URL.
+
+### Signature
+
+```typescript
+type SingleParser<T> = {
+  type?: "single";
+  parse: (value: string) => T | null;
+  serialize?: (value: T) => string;
+  eq?: (a: T, b: T) => boolean;
+};
+
+function createParser<T>(
+  parser: Require<SingleParser<T>, "parse" | "serialize">
+): SingleParserBuilder<T>
+```
+
+Both `parse` and `serialize` are **required**. `eq` is optional.
+
+### Parameters
+
+<ParamField path="parse" type="(value: string) => T | null" required>
+  Converts the raw URL string to your JS type. Return `null` to signal an invalid or unrecognised value — nuqs will treat the key as absent when `null` is returned.
+</ParamField>
+
+<ParamField path="serialize" type="(value: T) => string" required>
+  Converts your JS value back to a URL string. Must be the inverse of `parse` for round-trip correctness.
+</ParamField>
+
+<ParamField path="eq" type="(a: T, b: T) => boolean">
+  Custom equality function used by `clearOnDefault` to determine whether the current value equals the default. Defaults to reference equality (`===`). Provide a deep-equal implementation for objects and arrays.
+</ParamField>
+
+### Returns
+
+A `SingleParserBuilder<T>` with the following methods:
+
+- `.withDefault(value)` — set a default; return type narrows from `T | null` to `T`
+- `.withOptions(options)` — merge `Options` (history, scroll, throttleMs, etc.)
+- `.parseServerSide(value)` — parse outside of a component
+
+---
+
+## `createMultiParser<T>`
+
+Creates a parser for a **multi-value** URL parameter — one key can appear multiple times (`?tags=a&tags=b`). The `parse` function receives an array of all values for that key.
+
+### Signature
+
+```typescript
+type MultiParser<T> = {
+  type: "multi";
+  parse: (value: ReadonlyArray<string>) => T | null;
+  serialize?: (value: T) => Array<string>;
+  eq?: (a: T, b: T) => boolean;
+};
+
+function createMultiParser<T>(
+  parser: Omit<MultiParser<T>, "parse" | "serialize"> & {
+    parse: (value: ReadonlyArray<string>) => T | null;
+    serialize?: (value: T) => Array<string>;
+  }
+): MultiParserBuilder<T>
+```
+
+### Parameters
+
+<ParamField path="parse" type="(value: ReadonlyArray<string>) => T | null" required>
+  Receives all URL values for the key as a read-only array. Return `null` for invalid input.
+</ParamField>
+
+<ParamField path="serialize" type="(value: T) => Array<string>">
+  Converts your JS value to an array of strings. Each element becomes a separate `key=value` pair in the URL. Defaults to `[String(v)]` if omitted.
+</ParamField>
+
+<ParamField path="eq" type="(a: T, b: T) => boolean">
+  Custom equality for `clearOnDefault`. Defaults to `===`.
+</ParamField>
+
+### Returns
+
+A `MultiParserBuilder<T>` with the same `.withDefault()`, `.withOptions()`, and `.parseServerSide()` methods as `SingleParserBuilder`.
+
+---
+
+## Examples
+
+### JSON object parser
+
+Store arbitrary JSON in a single URL parameter. `parse` catches exceptions so malformed JSON returns `null`.
+
+```typescript
+import { createParser, createQueryState } from "./nuqs";
+
+type Filters = {
+  category: string;
+  minPrice: number;
+  inStock: boolean;
+};
+
+const parseAsFilters = createParser<Filters>({
+  parse(value) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(value));
+      if (
+        typeof parsed.category === "string" &&
+        typeof parsed.minPrice === "number" &&
+        typeof parsed.inStock === "boolean"
+      ) {
+        return parsed as Filters;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  },
+  serialize(value) {
+    return encodeURIComponent(JSON.stringify(value));
+  },
+  eq(a, b) {
+    return (
+      a.category === b.category &&
+      a.minPrice === b.minPrice &&
+      a.inStock === b.inStock
+    );
+  },
+});
+
+const DEFAULT_FILTERS: Filters = {
+  category: "all",
+  minPrice: 0,
+  inStock: false,
+};
+
+function ProductList() {
+  const [filters, setFilters] = createQueryState(
+    "filters",
+    parseAsFilters.withDefault(DEFAULT_FILTERS)
+  );
+  // filters() is always Filters — never null
+}
+```
+
+---
+
+### Tags array with a custom separator
+
+Use a pipe separator to avoid conflicts with commas that may appear in tag names.
+
+```typescript
+import { createParser, createQueryState } from "./nuqs";
+
+const parseAsTags = createParser<string[]>({
+  parse(value) {
+    if (value === "") return [];
+    return value.split("|").map((tag) => tag.trim()).filter(Boolean);
+  },
+  serialize(value) {
+    return value.map((tag) => tag.replace(/\|/g, "%7C")).join("|");
+  },
+  eq(a, b) {
+    return a.length === b.length && a.every((tag, i) => tag === b[i]);
+  },
+});
+
+function TagFilter() {
+  const [tags, setTags] = createQueryState(
+    "tags",
+    parseAsTags.withDefault([])
+  );
+  // ?tags=design|open+source|typescript  →  ["design", "open source", "typescript"]
+}
+```
+
+<Tip>
+  For simple comma-separated arrays of built-in types, prefer `parseAsArrayOf` from the built-in parsers. Use `createParser` when you need full control over the split/join logic.
+</Tip>
+
+---
+
+### Custom date range parser
+
+Encode a `{ from: Date; to: Date }` object as two ISO strings joined by `..`.
+
+```typescript
+import { createParser, createQueryState } from "./nuqs";
+
+type DateRange = { from: Date; to: Date };
+
+const parseAsDateRange = createParser<DateRange>({
+  parse(value) {
+    const [fromStr, toStr] = value.split("..");
+    if (!fromStr || !toStr) return null;
+
+    const from = new Date(fromStr);
+    const to = new Date(toStr);
+
+    if (isNaN(from.valueOf()) || isNaN(to.valueOf())) return null;
+    if (from > to) return null;
+
+    return { from, to };
+  },
+  serialize({ from, to }) {
+    return `${from.toISOString()}..${to.toISOString()}`;
+  },
+  eq(a, b) {
+    return (
+      a.from.valueOf() === b.from.valueOf() &&
+      a.to.valueOf() === b.to.valueOf()
+    );
+  },
+});
+
+function DateRangePicker() {
+  const [range, setRange] = createQueryState("range", parseAsDateRange);
+  // ?range=2024-01-01T00:00:00.000Z..2024-01-31T23:59:59.999Z
+  // range() is DateRange | null
+}
+```
+
+---
+
+### Multi-value parameter with `createMultiParser`
+
+Use `createMultiParser` when you want the browser URL to use repeated keys (`?role=admin&role=editor`) rather than a single encoded value.
+
+```typescript
+import { createMultiParser, createQueryState } from "./nuqs";
+
+type Role = "admin" | "editor" | "viewer";
+const VALID_ROLES: Role[] = ["admin", "editor", "viewer"];
+
+const parseAsRoles = createMultiParser<Role[]>({
+  parse(values) {
+    const roles = values.filter((v): v is Role =>
+      (VALID_ROLES as string[]).includes(v)
+    );
+    return roles.length > 0 ? roles : null;
+  },
+  serialize(roles) {
+    return roles as string[];
+  },
+  eq(a, b) {
+    return a.length === b.length && a.every((r, i) => r === b[i]);
+  },
+});
+
+function RoleFilter() {
+  const [roles, setRoles] = createQueryState(
+    "role",
+    parseAsRoles.withDefault(["viewer"])
+  );
+  // ?role=admin&role=editor  →  ["admin", "editor"]
+}
+```
+
+---
+
+### Using `eq` for deep equality
+
+Without a custom `eq`, `clearOnDefault` compares objects by reference (`===`). Two objects with identical contents are not `===`, so the key would never be cleared from the URL even when the value matches the default.
+
+Always provide `eq` for object and array types:
+
+```typescript
+import { createParser } from "./nuqs";
+
+type Point = { x: number; y: number };
+
+const parseAsPoint = createParser<Point>({
+  parse(value) {
+    const [x, y] = value.split(",").map(Number);
+    if (isNaN(x) || isNaN(y)) return null;
+    return { x, y };
+  },
+  serialize({ x, y }) {
+    return `${x},${y}`;
+  },
+  // Without this, { x: 0, y: 0 } !== { x: 0, y: 0 } by reference,
+  // so the default would never clear from the URL.
+  eq(a, b) {
+    return a.x === b.x && a.y === b.y;
+  },
+});
+
+const DEFAULT_POINT: Point = { x: 0, y: 0 };
+
+const pointParser = parseAsPoint.withDefault(DEFAULT_POINT);
+// When the user navigates to { x: 0, y: 0 }, the key is removed from the URL.
+```
+
+<Warning>
+  If you omit `eq` for an object or array type, `clearOnDefault` will never remove the key from the URL — even when the value is semantically equal to the default — because two distinct objects are never `===`.
+</Warning>

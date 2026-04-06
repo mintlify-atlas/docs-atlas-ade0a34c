@@ -1,0 +1,229 @@
+---
+title: "Installation"
+description: "Set up nuqs for SolidJS in your project: copy the source, install dependencies, configure TypeScript and Vite."
+---
+
+<Warning>
+`solid-js-nuqs-variant` is not yet published to npm (`"private": true` in `package.json`). Integration is source-level: you copy the `src/nuqs/` directory into your project rather than installing a package.
+</Warning>
+
+## Prerequisites
+
+| Requirement | Version |
+|---|---|
+| SolidJS | `^1.9.10` |
+| TypeScript | `~5.9.3` |
+| Vite | `^8.0.0-beta.13` |
+| `vite-plugin-solid` | `^2.11.10` |
+
+## Step 1: Install SolidJS dependencies
+
+If you are adding nuqs to an existing SolidJS project, make sure these packages are present. If you are starting fresh, scaffold with a SolidJS Vite template first.
+
+<CodeGroup>
+
+```bash npm
+npm install solid-js
+npm install --save-dev typescript vite vite-plugin-solid
+```
+
+```bash yarn
+yarn add solid-js
+yarn add --dev typescript vite vite-plugin-solid
+```
+
+```bash pnpm
+pnpm add solid-js
+pnpm add --save-dev typescript vite vite-plugin-solid
+```
+
+```bash bun
+bun add solid-js
+bun add --dev typescript vite vite-plugin-solid
+```
+
+</CodeGroup>
+
+<Note>
+Vite 8 is currently in beta. The library's `package.json` uses `overrides` to pin it:
+
+```json package.json
+{
+  "overrides": {
+    "vite": "^8.0.0-beta.13"
+  }
+}
+```
+
+If your project targets a stable Vite version, check whether Vite 8 compatibility matters for your setup before pinning.
+</Note>
+
+## Step 2: Copy the nuqs source
+
+Clone or download the repository, then copy the `src/nuqs/` directory into your project:
+
+```bash
+# Clone the repo (read-only reference)
+git clone https://github.com/ItsNoxius/solid-js-nuqs-variant.git
+
+# Copy the library source into your project
+cp -r solid-js-nuqs-variant/src/nuqs your-project/src/nuqs
+```
+
+Your project tree should look like this after copying:
+
+```
+your-project/
+└── src/
+    ├── nuqs/
+    │   ├── index.ts
+    │   ├── defs.ts
+    │   ├── parsers.ts
+    │   ├── useQueryState.ts
+    │   ├── useQueryStates.ts
+    │   └── adapters/
+    │       └── solid.tsx
+    ├── App.tsx
+    └── index.tsx
+```
+
+All public exports flow through `src/nuqs/index.ts`. Import from that barrel file:
+
+```tsx
+import { createQueryState, parseAsString, NuqsAdapter } from "./nuqs";
+```
+
+## Step 3: Configure Vite
+
+Your `vite.config.ts` must include `vite-plugin-solid` so that JSX is transformed correctly. The `solid.tsx` adapter file uses JSX, so this is required even if you are only importing from `useQueryState.ts` directly.
+
+```ts vite.config.ts
+import { defineConfig } from "vite";
+import solid from "vite-plugin-solid";
+
+export default defineConfig({
+  plugins: [solid()],
+});
+```
+
+<Tip>
+`vite-plugin-solid` handles the `solid-js` JSX transform automatically. You do not need to configure `tsconfig.json` `jsxImportSource` by hand — the plugin sets it for TypeScript in Vite's pipeline.
+</Tip>
+
+## Step 4: Configure TypeScript
+
+The library is written in strict TypeScript. Your `tsconfig.json` should enable JSX support for SolidJS and include your source files. A minimal working configuration:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
+```
+
+Key fields for SolidJS + nuqs:
+
+| Field | Required value | Reason |
+|---|---|---|
+| `jsx` | `"preserve"` | Vite + `vite-plugin-solid` handles JSX compilation; TypeScript preserves it. |
+| `jsxImportSource` | `"solid-js"` | Resolves JSX factory functions from SolidJS. |
+| `moduleResolution` | `"bundler"` or `"node16"` | Needed to resolve `.tsx` extension imports in the nuqs source. |
+| `strict` | `true` | Parser types and generic inference depend on strict null checks. |
+
+<Note>
+If you have a separate `tsconfig.node.json` for Vite config files (common in scaffolded projects), keep that file targeting the node environment and leave `tsconfig.json` targeting the browser.
+</Note>
+
+## Step 5: Wrap your app with NuqsAdapter
+
+After copying the source and configuring the build tooling, add `NuqsAdapter` to your entry point. Every `createQueryState` and `createQueryStates` call in the component tree requires this provider to be an ancestor.
+
+```tsx src/index.tsx
+/* @refresh reload */
+import { render } from "solid-js/web";
+import App from "./App.tsx";
+import { NuqsAdapter } from "./nuqs";
+
+const root = document.getElementById("root");
+
+render(
+  () => (
+    <NuqsAdapter>
+      <App />
+    </NuqsAdapter>
+  ),
+  root!,
+);
+```
+
+### NuqsAdapter props
+
+| Prop | Type | Default | Description |
+|---|---|---|---|
+| `children` | `JSX.Element` | — | Your application tree. Required. |
+| `defaultOptions` | `Partial<Options>` | `{}` | Global defaults for `scroll`, `shallow`, `limitUrlUpdates`, and `clearOnDefault`. Applied to every hook in the tree unless overridden per-call. Note: `history` and `throttleMs` are not configurable at the adapter level. |
+| `processUrlSearchParams` | `(search: URLSearchParams) => URLSearchParams` | `undefined` | Intercept and transform params before they are written to the URL. Useful for preserving or sanitizing params that nuqs does not manage. |
+
+### Setting global defaults
+
+Use `defaultOptions` to configure behaviour once instead of repeating it on every hook:
+
+```tsx src/index.tsx
+render(
+  () => (
+    <NuqsAdapter
+      defaultOptions={{
+        scroll: false,
+        clearOnDefault: true,
+      }}
+    >
+      <App />
+    </NuqsAdapter>
+  ),
+  root!,
+);
+```
+
+## Verify the setup
+
+Run the dev server and open your browser:
+
+```bash
+npm run dev
+```
+
+In any component, add a quick smoke test:
+
+```tsx
+import { createQueryState, parseAsString } from "./nuqs";
+
+function Probe() {
+  const [val, setVal] = createQueryState("test", parseAsString);
+  return (
+    <button onClick={() => setVal("hello")}>
+      URL value: {val() ?? "none"}
+    </button>
+  );
+}
+```
+
+Click the button. The address bar should update to include `?test=hello` and the button label should change reactively.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Walk through a complete working example using real app code.
+  </Card>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Architecture overview and full list of exports.
+  </Card>
+</CardGroup>

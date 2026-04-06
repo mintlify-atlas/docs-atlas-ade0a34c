@@ -1,0 +1,227 @@
+---
+title: "Options"
+description: "Configure how query state reads and writes the URL — history mode, scroll behavior, rate limiting, and more."
+---
+
+`Options` is a plain object you can pass to `createQueryState`, `createQueryStates`, or the setter function to control URL update behavior. Options provided at the call site override those set on the parser, which in turn override the `defaultOptions` on `<NuqsAdapter>`.
+
+## Full type
+
+```typescript
+// From defs.ts
+export type HistoryOptions = "replace" | "push";
+
+export type LimitUrlUpdates =
+  | { method: "debounce"; timeMs: number }
+  | { method: "throttle"; timeMs: number };
+
+export type Options = {
+  history?: HistoryOptions;
+  scroll?: boolean;
+  shallow?: boolean;
+  throttleMs?: number;
+  limitUrlUpdates?: LimitUrlUpdates;
+  clearOnDefault?: boolean;
+};
+```
+
+## Option reference
+
+### `history`
+
+<ParamField path="history" type='"replace" | "push"' default="replace">
+  Controls how URL updates interact with the browser's history stack.
+
+  - `"replace"` — overwrites the current history entry. The back button returns the user to wherever they were before navigating to the current page.
+  - `"push"` — creates a new history entry. The back button returns to the previous URL state, making every query state change navigable.
+
+  ```typescript
+  // Back button steps through each count value
+  const [count, setCount] = createQueryState("count", {
+    ...parseAsInteger.withDefault(0),
+    history: "push",
+  });
+
+  // Override per call
+  setCount(5, { history: "push" });
+  ```
+
+  Use `"push"` when the state change is meaningful enough that users should be able to navigate back to it (e.g., a search result page). Use `"replace"` for ephemeral UI state (e.g., a tooltip or popover).
+</ParamField>
+
+### `scroll`
+
+<ParamField path="scroll" type="boolean" default="false">
+  When `true`, the page scrolls to the top after each URL update — equivalent to calling `window.scrollTo({ top: 0 })`.
+
+  ```typescript
+  const [page, setPage] = createQueryState("page", {
+    ...parseAsInteger.withDefault(1),
+    scroll: true, // scroll to top on every page change
+  });
+  ```
+
+  This is useful for paginated views where navigating to the next page should reset the scroll position.
+</ParamField>
+
+### `shallow`
+
+<ParamField path="shallow" type="boolean" default="true">
+  In nuqs for React (Next.js), `shallow: false` triggers a full server-side navigation. In this SolidJS SPA adapter, the URL is always updated client-side and this option has no effect.
+
+  It is retained for API compatibility with nuqs so that parsers and options written for a React project can be reused without modification.
+</ParamField>
+
+### `throttleMs`
+
+<ParamField path="throttleMs" type="number" default="50">
+  The minimum interval in milliseconds between URL writes. URL updates that arrive faster than this rate are batched and the last value in the batch is written.
+
+  The 50 ms default exists because browsers impose internal rate limits on the History API (typically around 100 calls per 30 seconds in Chromium). Staying at 50 ms keeps nuqs well within those limits even during rapid user input.
+
+  ```typescript
+  // Allow up to one URL update every 200ms
+  const [query, setQuery] = createQueryState("q", {
+    ...parseAsString,
+    throttleMs: 200,
+  });
+  ```
+
+  <Note>
+  If `limitUrlUpdates` is also set, it takes precedence over `throttleMs`. Use one or the other, not both.
+  </Note>
+</ParamField>
+
+### `limitUrlUpdates`
+
+<ParamField path="limitUrlUpdates" type="LimitUrlUpdates">
+  Fine-grained rate limiting that takes precedence over `throttleMs`. Choose between **throttle** (max rate) and **debounce** (settle after idle period).
+
+  ```typescript
+  type LimitUrlUpdates =
+    | { method: "debounce"; timeMs: number }
+    | { method: "throttle"; timeMs: number };
+  ```
+
+  <Tabs>
+    <Tab title="Throttle">
+      Writes to the URL at most once per `timeMs` milliseconds, using the most recent value. Intermediate values are dropped.
+
+      ```typescript
+      import { throttle } from "./nuqs";
+
+      const [query, setQuery] = createQueryState("q", {
+        ...parseAsString,
+        limitUrlUpdates: throttle(100),
+      });
+      ```
+
+      Best for: sliders, drag interactions, or any continuous input where the intermediate states do not matter.
+    </Tab>
+    <Tab title="Debounce">
+      Waits until the value has stopped changing for `timeMs` milliseconds, then writes once. Every new update resets the timer.
+
+      ```typescript
+      import { debounce } from "./nuqs";
+
+      const [query, setQuery] = createQueryState("q", {
+        ...parseAsString,
+        limitUrlUpdates: debounce(300),
+      });
+      ```
+
+      Best for: search inputs, where you want to wait until the user has finished typing before updating the URL.
+    </Tab>
+  </Tabs>
+
+  You can also construct the object literal directly without the helper functions:
+
+  ```typescript
+  const [query, setQuery] = createQueryState("q", {
+    ...parseAsString,
+    limitUrlUpdates: { method: "debounce", timeMs: 300 },
+  });
+  ```
+</ParamField>
+
+### `clearOnDefault`
+
+<ParamField path="clearOnDefault" type="boolean" default="true">
+  When `true` (the default), setting a value equal to the parser's `defaultValue` removes the key from the URL entirely instead of writing the default value explicitly.
+
+  This keeps URLs canonical: the default state is represented by the absence of the parameter.
+
+  ```typescript
+  const [count, setCount] = createQueryState(
+    "count",
+    parseAsInteger.withDefault(0),
+  );
+
+  setCount(0);  // URL: (key absent — same as default)
+  setCount(5);  // URL: ?count=5
+  ```
+
+  Set to `false` to always write the value, even when it matches the default:
+
+  ```typescript
+  const [count, setCount] = createQueryState("count", {
+    ...parseAsInteger.withDefault(0),
+    clearOnDefault: false,
+  });
+
+  setCount(0);  // URL: ?count=0
+  setCount(5);  // URL: ?count=5
+  ```
+
+  <Tip>
+  Keeping `clearOnDefault: true` (the default) produces shorter, more shareable URLs and avoids leaking internal defaults into the address bar.
+  </Tip>
+</ParamField>
+
+## Option precedence
+
+Options are resolved from most specific to least specific:
+
+```
+Setter call options
+  → Parser-level options (set via .withOptions())
+    → createQueryState / createQueryStates options argument
+      → NuqsAdapter defaultOptions
+        → Built-in defaults
+```
+
+For example:
+
+```typescript
+// Adapter sets the baseline
+<NuqsAdapter defaultOptions={{ scroll: false, clearOnDefault: true }}>
+
+// Parser adds a default throttle
+const parser = parseAsString.withOptions({ throttleMs: 200 });
+
+// createQueryState overrides history mode
+const [q, setQ] = createQueryState("q", { ...parser, history: "push" });
+
+// Setter call overrides for this one update only
+setQ("hello", { history: "replace", scroll: true });
+```
+
+## Setting defaults for the whole app
+
+Pass `defaultOptions` to `<NuqsAdapter>` to apply options across all `createQueryState` calls without touching each one individually:
+
+```tsx
+<NuqsAdapter
+  defaultOptions={{
+    scroll: true,
+    clearOnDefault: true,
+    limitUrlUpdates: { method: "debounce", timeMs: 200 },
+  }}
+>
+  <App />
+</NuqsAdapter>
+```
+
+<Note>
+`defaultOptions` on `<NuqsAdapter>` supports `scroll`, `clearOnDefault`, `limitUrlUpdates`, and `shallow`. The `history` option is not configurable at the adapter level — set it per-parser or per-call.
+</Note>

@@ -1,0 +1,243 @@
+---
+title: "createQueryState"
+description: "Manage a single URL search parameter as a reactive SolidJS signal"
+---
+
+## Overview
+
+`createQueryState` binds a single URL search parameter to a reactive SolidJS signal. Reading the accessor re-runs any reactive computation that depends on it. Writing via the setter updates the URL and notifies all subscribers.
+
+The return value is a `[accessor, setter]` tuple — consistent with SolidJS conventions. The accessor is a zero-argument function you call to read the current value reactively. The setter accepts a new value, `null` to remove the key from the URL, or an updater function for deriving the next value from the current one.
+
+<Note>
+  When a `defaultValue` is provided via `.withDefault()`, the accessor return type is `T` (non-nullable). Without a default, it returns `T | null`.
+</Note>
+
+## Signatures
+
+```typescript
+// With default value — returns non-nullable T
+function createQueryState<T>(
+  key: string,
+  options: CreateQueryStateOptions<T> & { defaultValue: NonNullable<T> },
+): CreateQueryStateReturn<T, NonNullable<T>>
+
+// Without default value — returns T | null
+function createQueryState<T>(
+  key: string,
+  options?: CreateQueryStateOptions<T>,
+): CreateQueryStateReturn<T, undefined>
+```
+
+## Parameters
+
+<ParamField path="key" type="string" required>
+  The URL search parameter name. For example, `"name"` maps to `?name=...` in the URL.
+</ParamField>
+
+<ParamField path="options" type="CreateQueryStateOptions<T>">
+  A parser builder (e.g. `parseAsString`, `parseAsInteger`) extended with optional `Options` fields. Pass the result of a built-in parser directly, or chain `.withDefault()` and `.withOptions()` to configure defaults and per-instance behavior.
+
+  <Expandable title="Options fields">
+    <ResponseField name="history" type='"replace" | "push"' default='"replace"'>
+      How the URL update affects browser history. `"push"` adds a new history entry so the Back button works. `"replace"` (default) overwrites the current entry.
+    </ResponseField>
+
+    <ResponseField name="scroll" type="boolean" default="false">
+      Whether to scroll to the top of the page after each URL update.
+    </ResponseField>
+
+    <ResponseField name="shallow" type="boolean" default="true">
+      Keeps URL updates client-side only. Has no effect in a Solid SPA context.
+    </ResponseField>
+
+    <ResponseField name="throttleMs" type="number" default="50">
+      Maximum time in milliseconds between URL updates. Defaults to 50ms to stay within browser History API rate limits.
+    </ResponseField>
+
+    <ResponseField name="limitUrlUpdates" type="{ method: 'debounce' | 'throttle'; timeMs: number }">
+      Fine-grained rate limiting. Takes precedence over `throttleMs` when both are set.
+    </ResponseField>
+
+    <ResponseField name="clearOnDefault" type="boolean" default="true">
+      When `true`, setting a value equal to `defaultValue` removes the key from the URL entirely rather than serializing it.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+## Return value
+
+```typescript
+type CreateQueryStateReturn<T, Default> = [
+  () => Default extends undefined ? T | null : T,
+  (
+    value: null | T | ((old: Default extends T ? T : T | null) => T | null),
+    options?: Options,
+  ) => void,
+];
+```
+
+`createQueryState` returns a two-element tuple `[accessor, setter]`.
+
+<ResponseField name="accessor" type="() => T | null">
+  A zero-argument function that reactively returns the current URL parameter value. Call it inside JSX or a reactive computation to subscribe to changes. Returns `null` when the key is absent from the URL and no `defaultValue` was provided.
+</ResponseField>
+
+<ResponseField name="setter" type="(value, options?) => void">
+  Updates the URL search parameter. Accepts a direct value, `null`, or an updater function. An optional second argument overrides `Options` for this call only.
+
+  <Expandable title="Setter argument forms">
+    <ResponseField name="value: T" type="T">
+      Sets the parameter to the serialized form of `value`.
+    </ResponseField>
+
+    <ResponseField name="value: null" type="null">
+      Removes the key from the URL entirely.
+    </ResponseField>
+
+    <ResponseField name="value: (old: T | null) => T | null" type="function">
+      An updater function that receives the current value and returns the next value. Return `null` to clear the parameter. Useful for increments or other derived updates.
+    </ResponseField>
+
+    <ResponseField name="options?: Options" type="Options">
+      Per-call overrides for `history`, `scroll`, `shallow`, `throttleMs`, `limitUrlUpdates`, and `clearOnDefault`. These take precedence over instance-level options set via `.withOptions()`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+### Basic string state
+
+Bind a text input to the `name` query parameter. The key is removed from the URL when the input is cleared.
+
+```tsx
+import { createQueryState, parseAsString } from "./nuqs";
+
+function GreetingForm() {
+  const [name, setName] = createQueryState("name", parseAsString);
+
+  return (
+    <>
+      <input
+        type="text"
+        value={name() ?? ""}
+        onInput={(e) => setName(e.currentTarget.value || null)}
+        placeholder="Your name"
+      />
+      <button onClick={() => setName(null)}>Clear</button>
+      <p>Hello, {name() ?? "anonymous visitor"}!</p>
+    </>
+  );
+}
+```
+
+### Integer with default value
+
+Using `.withDefault()` gives the accessor a non-nullable return type. The URL key is omitted when the value equals the default (`0`) because `clearOnDefault` is `true` by default.
+
+```tsx
+import { createQueryState, parseAsInteger } from "./nuqs";
+
+function Counter() {
+  const [count, setCount] = createQueryState(
+    "count",
+    parseAsInteger.withDefault(0),
+  );
+
+  return (
+    <>
+      <p>Count: {count()}</p>
+      <button onClick={() => setCount(0)}>Reset</button>
+      <button onClick={() => setCount(null)}>Clear from URL</button>
+    </>
+  );
+}
+```
+
+### Updater function pattern
+
+Pass a function to derive the next value from the current one. The argument to the updater is `T | null` when no default is set, and `T` when a default was provided.
+
+```tsx
+import { createQueryState, parseAsInteger } from "./nuqs";
+
+function Counter() {
+  const [count, setCount] = createQueryState(
+    "count",
+    parseAsInteger.withDefault(0),
+  );
+
+  return (
+    <>
+      <button onClick={() => setCount((c) => (c ?? 0) + 1)}>+</button>
+      <button onClick={() => setCount((c) => (c ?? 0) - 1)}>-</button>
+    </>
+  );
+}
+```
+
+### Per-call options override
+
+The setter's second argument overrides options for a single call. Here, `history: "push"` is applied only when the user explicitly navigates, keeping other updates non-navigable.
+
+```tsx
+import { createQueryState, parseAsInteger } from "./nuqs";
+
+function PaginatedList() {
+  const [page, setPage] = createQueryState("page", parseAsInteger.withDefault(0));
+
+  return (
+    <button onClick={() => setPage((p) => p + 1, { history: "push" })}>
+      Next page
+    </button>
+  );
+}
+```
+
+### Setting null to clear from URL
+
+Setting a value to `null` removes the key from the URL completely, as opposed to serializing an empty string.
+
+```tsx
+import { createQueryState, parseAsString } from "./nuqs";
+
+function SearchBar() {
+  const [query, setQuery] = createQueryState("q", parseAsString);
+
+  return (
+    <button onClick={() => setQuery(null)}>
+      Clear search
+    </button>
+  );
+}
+```
+
+## Type reference
+
+```typescript
+export type CreateQueryStateOptions<T> = GenericParser<T> & Options;
+
+export type CreateQueryStateReturn<T, Default> = [
+  () => Default extends undefined ? T | null : T,
+  (
+    value: null | T | ((old: Default extends T ? T : T | null) => T | null),
+    options?: Options,
+  ) => void,
+];
+```
+
+```typescript
+export type Options = {
+  history?: "replace" | "push";
+  scroll?: boolean;
+  shallow?: boolean;
+  throttleMs?: number;
+  limitUrlUpdates?: LimitUrlUpdates;
+  clearOnDefault?: boolean;
+};
+
+export type LimitUrlUpdates =
+  | { method: "debounce"; timeMs: number }
+  | { method: "throttle"; timeMs: number };
+```

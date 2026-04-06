@@ -1,0 +1,169 @@
+---
+title: "Rate Limiting"
+description: "The browser History API has strict rate limits. nuqs for SolidJS protects you automatically, but you can customize the behavior with throttle and debounce strategies."
+---
+
+The browser's History API enforces a hard limit of roughly **100 calls per 30 seconds**. Exceeding it silently drops updates or throws errors in some browsers. nuqs for SolidJS applies rate limiting automatically so you never have to think about it — but you can tune the strategy for your specific use case.
+
+## Default behavior
+
+Out of the box, every URL update is throttled with a 50ms minimum interval between writes. This default comes directly from the `defaultRateLimit` constant:
+
+```typescript
+export const defaultRateLimit = {
+  method: "throttle",
+  timeMs: 50,
+};
+```
+
+This means updates will be batched and written to the URL at most once every 50ms, which keeps you well within the browser's limits while still feeling instant to users.
+
+## `throttleMs` option
+
+The `throttleMs` option is a shorthand for setting the throttle time in milliseconds. Use it when you want to increase the interval beyond the 50ms default — for example, on inputs that update very frequently.
+
+```tsx
+import { createQueryState, parseAsInteger } from "./nuqs";
+
+const [value, setValue] = createQueryState("v", parseAsInteger.withOptions({
+  throttleMs: 200,
+}));
+```
+
+<Note>
+`throttleMs` only controls the throttle interval. If you need debounce behavior instead, use the `limitUrlUpdates` option described below.
+</Note>
+
+## `limitUrlUpdates` option
+
+For full control over the rate-limiting strategy, use `limitUrlUpdates`. This option accepts a `LimitUrlUpdates` object and takes precedence over `throttleMs` when both are set.
+
+```typescript
+type LimitUrlUpdates =
+  | { method: "throttle"; timeMs: number }
+  | { method: "debounce"; timeMs: number }
+```
+
+nuqs exports two helper functions — `throttle` and `debounce` — that create the correct object shape for you, plus the `defaultRateLimit` constant if you need to reference the default programmatically:
+
+```typescript
+// The built-in default — throttle at 50ms
+export const defaultRateLimit = {
+  method: "throttle",
+  timeMs: 50,
+};
+
+export function throttle(timeMs: number): LimitUrlUpdates {
+  return { method: "throttle", timeMs };
+}
+
+export function debounce(timeMs: number): LimitUrlUpdates {
+  return { method: "debounce", timeMs };
+}
+```
+
+Import them directly from `"./nuqs"`:
+
+```tsx
+import {
+  createQueryState,
+  parseAsString,
+  debounce,
+  throttle,
+  defaultRateLimit,
+} from "./nuqs";
+```
+
+## Throttle vs. debounce
+
+Choosing the right strategy depends on the nature of the input:
+
+<Tabs>
+  <Tab title="Throttle">
+    **Fires at regular intervals** while the user is interacting. The URL is updated continuously — just no more often than `timeMs` allows.
+
+    Best for inputs where intermediate values matter:
+    - Range sliders
+    - Scroll position
+    - Live-dragged map viewports
+
+    ```tsx
+    import { createQueryState, parseAsInteger, throttle } from "./nuqs";
+
+    const [zoom, setZoom] = createQueryState("zoom", parseAsInteger.withOptions({
+      limitUrlUpdates: throttle(100),
+    }));
+
+    // URL updates at most once every 100ms while the slider moves
+    return (
+      <input
+        type="range"
+        min={1}
+        max={20}
+        value={zoom() ?? 10}
+        onInput={(e) => setZoom(Number(e.currentTarget.value))}
+      />
+    );
+    ```
+  </Tab>
+  <Tab title="Debounce">
+    **Fires only after the user stops interacting** for `timeMs` milliseconds. Intermediate values are discarded — the URL is written once when the input settles.
+
+    Best for inputs where only the final value matters:
+    - Search fields
+    - Filter inputs
+    - Form fields with live validation
+
+    ```tsx
+    import { createQueryState, parseAsString, debounce } from "./nuqs";
+
+    const [search, setSearch] = createQueryState("q", parseAsString.withOptions({
+      limitUrlUpdates: debounce(300),
+    }));
+
+    // URL only updates 300ms after the user stops typing
+    return (
+      <input
+        type="text"
+        value={search() ?? ""}
+        onInput={(e) => setSearch(e.currentTarget.value || null)}
+        placeholder="Search..."
+      />
+    );
+    ```
+  </Tab>
+</Tabs>
+
+## Per-call override
+
+You can override the rate-limiting strategy on a per-call basis by passing `limitUrlUpdates` as the second argument to the setter. This lets a single piece of state use different strategies in different situations.
+
+```tsx
+import { createQueryState, parseAsString, debounce } from "./nuqs";
+
+const [search, setSearch] = createQueryState("q", parseAsString.withOptions({
+  limitUrlUpdates: debounce(300),
+}));
+
+// Use a longer debounce for this specific call
+setSearch("value", { limitUrlUpdates: debounce(500) });
+
+// Or switch to throttle for this call only
+setSearch("value", { limitUrlUpdates: throttle(100) });
+```
+
+<Tip>
+Per-call options are useful for accessibility scenarios — for example, using a longer debounce on mobile where typing is slower, or disabling rate limiting entirely when setting a value programmatically (not from user input).
+</Tip>
+
+## Priority order
+
+When multiple rate-limiting options are set, nuqs resolves them in this order (highest priority first):
+
+1. Per-call `limitUrlUpdates` (passed to the setter)
+2. Parser-level `limitUrlUpdates` (set via `withOptions`)
+3. Hook-level `limitUrlUpdates` (set in `createQueryState` / `createQueryStates` options)
+4. Hook-level `throttleMs`
+5. The 50ms default throttle
+
+`limitUrlUpdates` always takes precedence over `throttleMs` when both are set at the same level.
